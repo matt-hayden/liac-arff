@@ -169,40 +169,50 @@ class Reader(object):
     '''ARFF Reader'''
 
     def __init__(self, s):
-
-        # A list of lines of ``s``
-        self.__data = s.replace('\r', '').strip().split('\n')
+        if isinstance(s, basestring):
+            # A list of lines of ``s``
+            self.__data = s.replace('\r', '').strip().split('\n')
+	else: # an iterable of strings is supported
+            self.__data = s
         self.line_num = -1
 
     def __iter__(self):
+	commenthook = self.commenthook
         for line in self.__data:
             self.line_num += 1
 
             # Ignore empty lines
             line = line.strip()
             if not line: continue
+	    uline = line.upper()
 
             # Comments
-            if line.startswith(COMMENT):
-                yield (COMMENT, re.sub('^\%( )?', '', line))
+            if uline.startswith(COMMENT):
+                #yield (COMMENT, re.sub('^\%( )?', '', line))
+                yield (COMMENT, commenthook(line))
 
             # Relation
-            elif line.upper().startswith(RELATION):
+            elif uline.startswith(RELATION):
                 _, value = re.sub('( |\t)+', ' ', line).split(' ', 1)
                 yield (RELATION, value)
 
             # Attributes
-            elif line.upper().startswith(ATTRIBUTE):
+            elif uline.startswith(ATTRIBUTE):
                 _, name, value = re.sub('( |\t)+', ' ', line).split(' ', 2)
                 yield (ATTRIBUTE, name, value)
 
             # Data
-            elif line.upper().startswith(DATA):
+            elif uline.startswith(DATA):
                 yield (DATA,)
 
             # Data values
             else:
                 yield (VALUE, line)
+    @staticmethod
+    def commenthook(line):
+	while line[0] in '% ': line=line[1:]
+	return line
+	return re.sub('^\%( )?', '', line)
 
 
 def split(arff, n):
