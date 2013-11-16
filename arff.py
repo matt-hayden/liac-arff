@@ -38,6 +38,9 @@ import sys
 
 import random
 
+# new:
+import dateutil.parser
+import shlex # no unicode before python 2.7
 
 if 'unicode' not in __builtins__:
     # if `unicode` is not defined, we run in a python3 enviroment where all
@@ -49,7 +52,7 @@ if 'unicode' not in __builtins__:
         return str(s)
 
 
-# Interal Helpers =============================================================
+# Interal Type Converters =====================================================
 
 #Exceptions
 class WrongTypeException(Exception):
@@ -78,7 +81,35 @@ def __check_nominal(values, s):
 def __check_nominal_factory(values):
     return lambda x: __check_nominal(values, x)
 
-def __encode_attribute(type_values):
+# Constants ===================================================================
+ENCODE_ARFF_TYPES = {
+    'NUMERIC': float,
+    'REAL': float,
+    'INTEGER': int,
+    'STRING': __str_to_arff,
+    'DATE': str
+#    ('DATE',): str, # TODO
+#    ('DATE', "yyyy-MM-dd HH:mm:ss"): str # TODO
+}
+DECODE_ARFF_TYPES = {
+    'NUMERIC': float,
+    'REAL': float,
+    'INTEGER': int,
+    'STRING': __arff_to_str,
+    'DATE': dateutil.parser.parse
+#    ('DATE',): dateutil.parser.parse, # TODO
+#    ('DATE', "yyyy-MM-dd HH:mm:ss"): dateutil.parser.parse, # TODO
+}
+
+COMMENT = '%'
+RELATION = '@RELATION'
+ATTRIBUTE = '@ATTRIBUTE'
+DATA = '@DATA'
+VALUE = 'VALUE'
+
+# Internal Value Converters ===================================================
+    
+def __encode_attribute(type_values, ENCODE_ARFF_TYPES=ENCODE_ARFF_TYPES):
     '''create encoding functions for the attribute'''
     if isinstance(type_values, (list, tuple)):
         values = type_values
@@ -89,7 +120,7 @@ def __encode_attribute(type_values):
     else:
         raise ValueError("%s is not of a supported attribute type" % type_values)
 
-def __encode_values(values, attributes):
+def __encode_values(values, attributes, ENCODE_ARFF_TYPES=ENCODE_ARFF_TYPES):
     '''
         Encode the values relative to their attributes.
     attributes is a list of tuples with the arff type and the conversion function.
@@ -111,16 +142,16 @@ def __encode_values(values, attributes):
 
     return result
 
-def __decode_attribute(type_values):
+def __decode_attribute(type_values, DECODE_ARFF_TYPES=DECODE_ARFF_TYPES):
     '''Eval the type/values of the attribute'''
     if type_values.upper() in DECODE_ARFF_TYPES:
-        type = type_values.upper()
-        return (type, )
-    else:
+        arff_type = type_values.upper()
+        return (arff_type, )
+    else: # assume it's a comma-separated list like { a, ... , z}
         values = next(csv.reader([type_values.strip('{} ')]))
         return ([v.strip(', \'"') for v in values], )
 
-def __decode_values(values, attributes):
+def __decode_values(values, attributes, DECODE_ARFF_TYPES=DECODE_ARFF_TYPES):
     '''Eval the values relative to attributes'''
     values = next(csv.reader([values.strip('{} ')]))
     values = [v.strip(', \'"') for v in values]
@@ -144,27 +175,6 @@ def __decode_values(values, attributes):
     return result
 # =============================================================================
 
-# Constants ===================================================================
-ENCODE_ARFF_TYPES = {
-    'NUMERIC': float,
-    'REAL': float,
-    'INTEGER': int,
-    'STRING': __str_to_arff
-}
-DECODE_ARFF_TYPES = {
-    'NUMERIC': float,
-    'REAL': float,
-    'INTEGER': int,
-    'STRING': __arff_to_str
-}
-
-COMMENT = '%'
-RELATION = '@RELATION'
-ATTRIBUTE = '@ATTRIBUTE'
-DATA = '@DATA'
-VALUE = 'VALUE'
-# =============================================================================
-
 class Reader(object):
     '''ARFF Reader'''
 
@@ -172,34 +182,41 @@ class Reader(object):
         if isinstance(s, basestring):
             # A list of lines of ``s``
             self.__data = s.replace('\r', '').strip().split('\n')
-	else: # an iterable of strings is supported
-            self.__data = s
+        else: # an iterable of strings is supported
+            self.__data = iter(s)
         self.line_num = -1
 
     def __iter__(self):
-	commenthook = self.commenthook
+        commenthook = self.commenthook
         for line in self.__data:
             self.line_num += 1
 
             # Ignore empty lines
             line = line.strip()
             if not line: continue
-	    uline = line.upper()
+            uline = line.upper()
 
             # Comments
             if uline.startswith(COMMENT):
-                #yield (COMMENT, re.sub('^\%( )?', '', line))
+                #yield (COMMENT, re.sub('^\%( )?', '', line)) # orig
                 yield (COMMENT, commenthook(line))
 
             # Relation
             elif uline.startswith(RELATION):
-                _, value = re.sub('( |\t)+', ' ', line).split(' ', 1)
+#                _, value = re.sub('[ \t]+', ' ', line).split(' ', 1)
+                _, value = re.split('[ \t]+', line, maxsplit=1)
+                assert _ == RELATION
                 yield (RELATION, value)
 
             # Attributes
             elif uline.startswith(ATTRIBUTE):
-                _, name, value = re.sub('( |\t)+', ' ', line).split(' ', 2)
-                yield (ATTRIBUTE, name, value)
+#                _, name, type_description = re.sub('[ \t]+', ' ', line).split(' ', 2)
+                _, name, type_description = re.split('[ \t]+', line, maxsplit=2)
+                assert _ == ATTRIBUTE
+                if type_description.startswith('DATE'):
+#                    type_description = shlex.split(type_description) # TODO
+                    type_description = 'DATE'
+                yield (ATTRIBUTE, name, type_description)
 
             # Data
             elif uline.startswith(DATA):
@@ -210,9 +227,9 @@ class Reader(object):
                 yield (VALUE, line)
     @staticmethod
     def commenthook(line):
-	while line[0] in '% ': line=line[1:]
-	return line
-	return re.sub('^\%( )?', '', line)
+        while line and line[0] in '% ': line=line[1:]
+        return line
+        #return re.sub('^\%( )?', '', line) # orig
 
 
 def split(arff, n):
